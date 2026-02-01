@@ -109,8 +109,32 @@ if uploaded_files:
                     col1.metric("Total Realized Gain", f"${latest['total_realized_gain']:,.2f}")
                     col2.metric("Total Cost Basis (Held)", f"${latest['total_cost_basis']:,.2f}")
                     col3.metric("Est. Market Value", f"${latest['total_market_value']:,.2f}")
-                    col4.metric("Unrealized Gain", f"${unrealized_gain:,.2f}", 
-                                delta_color="normal")
+                    col4.metric("Unrealized Gain", f"${unrealized_gain:,.2f}", delta_color="normal")
+                    
+                    # If we are looking at a single asset (or filtered to one), show its specific Avg Buy Price
+                    # This is highly requested by user.
+                    if not holdings_df.empty:
+                        # Check if only 1 asset is significant or filtered
+                        if len(holdings_df) == 1:
+                            asset_row = holdings_df.iloc[0]
+                            st.divider()
+                            st.subheader(f"{asset_row['Asset']} Performance")
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric("Quantity Held", f"{asset_row['Quantity']:,.4f} {asset_row['Asset']}")
+                            m2.metric("Avg Buy Price", f"${asset_row['Avg Buy Price']:,.2f}")
+                            m3.metric("Current Price", f"${asset_row['Unit Price']:,.2f}")
+                        elif selected_assets_filter and len(selected_assets_filter) == 1:
+                             # User filtered to 1, find it in holdings
+                             asset_name = selected_assets_filter[0]
+                             row = holdings_df[holdings_df['Asset'] == asset_name]
+                             if not row.empty:
+                                 asset_row = row.iloc[0]
+                                 st.divider()
+                                 st.subheader(f"{asset_name} Performance")
+                                 m1, m2, m3 = st.columns(3)
+                                 m1.metric("Quantity Held", f"{asset_row['Quantity']:,.4f} {asset_name}")
+                                 m2.metric("Avg Buy Price", f"${asset_row['Avg Buy Price']:,.2f}")
+                                 m3.metric("Current Price", f"${asset_row['Unit Price']:,.2f}")
 
                 tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Holdings", "Asset Explorer", "Realized Gains"])
                 
