@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import re
 from src.loader import load_csvs, normalize_to_transactions
 from src.engine import FIFOEngine
 from src.analytics import calculate_portfolio_performance
@@ -26,6 +27,13 @@ deposits_as_returns = st.sidebar.checkbox(
     help="If checked, Deposits will NOT add new assets to your inventory. Use this if you are just moving assets BACK from your Cold Wallet to the Exchange, to avoid double counting."
 )
 
+def is_valid_hex_tx(tx_string):
+    """Checks if the string is a valid 64-character hex string (likely a blockchain hash)."""
+    if not tx_string:
+        return False
+    # Bitcoin TxID is usually 64 hex chars.
+    return bool(re.fullmatch(r'^[0-9a-fA-F]{64}$', str(tx_string)))
+
 if uploaded_files:
     with st.spinner("Loading and processing data..."):
         # Load Data
@@ -36,7 +44,9 @@ if uploaded_files:
         else:
             try:
                 transactions = normalize_to_transactions(df)
-                st.success(f"Loaded {len(transactions)} transactions.")
+                
+                # Toast for successful load
+                st.toast(f"Loaded {len(transactions)} transactions.", icon='✅')
                 
                 # --- ASSET FILTER ---
                 all_assets = sorted(list(set(t.asset for t in transactions)))
@@ -53,7 +63,7 @@ if uploaded_files:
                 if selected_assets_filter:
                     transactions = [t for t in transactions if t.asset in selected_assets_filter]
                 
-                st.info(f"Analyzing {len(transactions)} transactions for: {', '.join(selected_assets_filter)}")
+                st.toast(f"Analyzing {len(transactions)} transactions for: {', '.join(selected_assets_filter)}", icon='ℹ️')
 
                 # Run Engine
                 engine = FIFOEngine(transactions, withdrawals_as_transfers=withdrawals_as_held, deposits_as_transfers=deposits_as_returns)
@@ -111,32 +121,9 @@ if uploaded_files:
                     col3.metric("Est. Market Value", f"${latest['total_market_value']:,.2f}")
                     col4.metric("Unrealized Gain", f"${unrealized_gain:,.2f}", delta_color="normal")
                     
-                    # If we are looking at a single asset (or filtered to one), show its specific Avg Buy Price
-                    # This is highly requested by user.
-                    if not holdings_df.empty:
-                        # Check if only 1 asset is significant or filtered
-                        if len(holdings_df) == 1:
-                            asset_row = holdings_df.iloc[0]
-                            st.divider()
-                            st.subheader(f"{asset_row['Asset']} Performance")
-                            m1, m2, m3 = st.columns(3)
-                            m1.metric("Quantity Held", f"{asset_row['Quantity']:,.4f} {asset_row['Asset']}")
-                            m2.metric("Avg Buy Price", f"${asset_row['Avg Buy Price']:,.2f}")
-                            m3.metric("Current Price", f"${asset_row['Unit Price']:,.2f}")
-                        elif selected_assets_filter and len(selected_assets_filter) == 1:
-                             # User filtered to 1, find it in holdings
-                             asset_name = selected_assets_filter[0]
-                             row = holdings_df[holdings_df['Asset'] == asset_name]
-                             if not row.empty:
-                                 asset_row = row.iloc[0]
-                                 st.divider()
-                                 st.subheader(f"{asset_name} Performance")
-                                 m1, m2, m3 = st.columns(3)
-                                 m1.metric("Quantity Held", f"{asset_row['Quantity']:,.4f} {asset_name}")
-                                 m2.metric("Avg Buy Price", f"${asset_row['Avg Buy Price']:,.2f}")
-                                 m3.metric("Current Price", f"${asset_row['Unit Price']:,.2f}")
+                    # (REMOVED: Top-level Performance Section - moved to Asset Explorer tab)
 
-                tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Holdings", "Asset Explorer", "Realized Gains"])
+                tab1, tab2, tab3, tab4, tab5 = st.tabs(["Overview", "Holdings", "Asset Explorer", "Realized Gains", "Transactions"])
                 
                 with tab1:
                     st.subheader("Portfolio Growth Over Time")
@@ -163,8 +150,9 @@ if uploaded_files:
                             st.plotly_chart(fig_pie, use_container_width=True)
                             
                         with col_table:
+                            # INCREASED PRECISION
                             format_dict = {
-                                'Quantity': '{:,.4f}', 
+                                'Quantity': '{:,.8f}', 
                                 'Unit Price': '${:,.2f}',
                                 'Market Value': '${:,.2f}',
                                 'Cost Basis': '${:,.2f}',
@@ -179,9 +167,26 @@ if uploaded_files:
                     st.subheader("Asset Explorer")
                     available_assets = [c.replace('_qty', '') for c in daily_df.columns if c.endswith('_qty')]
                     if available_assets:
-                        selected_asset = st.selectbox("Select Asset to View Details", available_assets, index=0)
+                        # Default index: try to respect filter logic if possible, or just default to first
+                        default_idx = 0
+                        
+                        selected_asset = st.selectbox("Select Asset to View Details", available_assets, index=default_idx)
                         
                         st.markdown(f"### {selected_asset} Performance")
+                        
+                        # --- Per-Asset Metrics (Moved from Top) ---
+                        if not holdings_df.empty:
+                             row = holdings_df[holdings_df['Asset'] == selected_asset]
+                             if not row.empty:
+                                 asset_row = row.iloc[0]
+                                 m1, m2, m3 = st.columns(3)
+                                 m1.metric("Quantity Held", f"{asset_row['Quantity']:,.8f} {selected_asset}")
+                                 m2.metric("Avg Buy Price", f"${asset_row['Avg Buy Price']:,.2f}")
+                                 m3.metric("Current Price", f"${asset_row['Unit Price']:,.2f}")
+                             else:
+                                 st.info(f"No current holdings of {selected_asset} (Sold out or Historic only).")
+                        
+                        st.divider()
                         
                         cb_col = f"{selected_asset}_cb"
                         mv_col = f"{selected_asset}_mv"
@@ -208,8 +213,9 @@ if uploaded_files:
                         display_cols = ['date', 'asset', 'quantity', 'proceeds', 'cost_basis', 'gain_usd', 'tx_type']
                         display_df = filtered_gains[[c for c in display_cols if c in filtered_gains.columns]]
                         
+                        # INCREASED PRECISION
                         st.dataframe(display_df.style.format({
-                            "quantity": "{:,.4f}",
+                            "quantity": "{:,.8f}",
                             "proceeds": "${:,.2f}",
                             "cost_basis": "${:,.2f}",
                             "gain_usd": "${:,.2f}"
@@ -220,6 +226,64 @@ if uploaded_files:
                             st.metric(f"Realized Gain ({', '.join(selected_assets) if len(selected_assets) < 5 else 'Selected'})", f"${total_selected_gain:,.2f}")
                     else:
                         st.info("No realized gains yet.")
+
+                with tab5:
+                    st.subheader("Transaction History")
+                    
+                    # Convert list of transactions objects to DataFrame
+                    if transactions:
+                        tx_data = []
+                        for t in transactions:
+                            # LINK LOGIC
+                            # Validate if txid is a valid hex hash for Blockchain (64 chars, hex)
+                            # If not, try refid? (Often Kraken refid is the real blockchain hash for deposits/withdrawals)
+                            
+                            explorer_url = None
+                            
+                            if t.asset == 'BTC':
+                                target_hash = None
+                                
+                                # Try txid first
+                                if is_valid_hex_tx(t.txid):
+                                    target_hash = t.txid
+                                # Try refid second
+                                elif is_valid_hex_tx(t.refid):
+                                    target_hash = t.refid
+                                
+                                if target_hash:
+                                    explorer_url = f"https://mempool.space/tx/{target_hash}"
+                                
+                            tx_data.append({
+                                'Date': t.timestamp,
+                                'Type': t.type,
+                                'Asset': t.asset,
+                                'Amount': float(t.amount),
+                                'Fee': float(t.fee),
+                                'Fiat Value': float(t.fiat_value) if t.fiat_value is not None else 0.0,
+                                'TxID': t.txid,
+                                'RefID': t.refid,
+                                'Explorer': explorer_url
+                            })
+                        
+                        tx_df = pd.DataFrame(tx_data)
+                        
+                        # Display with Column Config for Links
+                        st.dataframe(
+                            tx_df,
+                            column_config={
+                                "Explorer": st.column_config.LinkColumn("Explorer", display_text="Mempool.space"),
+                                "Amount": st.column_config.NumberColumn("Amount", format="%.8f"),
+                                "Fee": st.column_config.NumberColumn("Fee", format="%.8f"),
+                                "Fiat Value": st.column_config.NumberColumn("Fiat Value", format="$%.2f"),
+                                "Date": st.column_config.DatetimeColumn("Date", format="D MMM YYYY, HH:mm")
+                            },
+                            column_order=['Date', 'Type', 'Asset', 'Amount', 'Fee', 'Fiat Value', 'Explorer', 'TxID', 'RefID'],
+                            use_container_width=True
+                        )
+                        
+                        st.caption(f"Showing {len(tx_df)} transactions.")
+                    else:
+                        st.info("No transactions to display.")
 
             except Exception as e:
                 st.error(f"Error processing data: {e}")
